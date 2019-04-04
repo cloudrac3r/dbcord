@@ -1,0 +1,10 @@
+# Private files
+/token.js
+/storage
+
+# Automatically generated files
+/node_modules
+
+# Editor files
+.vscode
+*.code-workspace
