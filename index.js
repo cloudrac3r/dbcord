@@ -6,12 +6,10 @@
 
 const Discord = require("eris");
 const fs = require("fs");
-const db = require("sqlite");
-const dbPromise = db.open(__dirname+"/storage/storage.db");
 
 const token = require(__dirname+"/token.js"); // Bot token
 //let cf = require("./common.js"); // Now loaded via module
-const defaultPrefix = "r/"; // Bot prefixes and related, can be changed by user preferences
+const defaultPrefix = "db "; // Bot prefixes and related, can be changed by user preferences
 const seperator = " ";
 
 let cf = {}; let bf = {}; let bc = {}; // Common Functions, Bot Framework and Bot Commands
@@ -27,9 +25,6 @@ let modules = [ // Load these modules on startup and on change
 	},{
 		filename: __dirname+"/utilities/ids.js",
 		dest: "common"
-	},{
-		filename: __dirname+"/utilities/errormanager.js",
-		dest: "bot framework"
 	}
 ];
 fs.readdirSync(__dirname+"/commands").forEach(filename => {
@@ -44,8 +39,8 @@ function log(data, type) {
 
 const destinations = {
 	"common": filename => Object.assign(cf, require(filename)),
-	"bot framework": filename => Object.assign(bf, require(filename)({Discord, bot, cf, bf, db, reloadEvent, loadModule})),
-	"bot commands": filename => Object.assign(bc, require(filename)({Discord, bot, cf, bf, bc, db, reloadEvent, loadModule}))
+	"bot framework": filename => Object.assign(bf, require(filename)({Discord, bot, cf, bf, reloadEvent, loadModule})),
+	"bot commands": filename => Object.assign(bc, require(filename)({Discord, bot, cf, bf, bc, reloadEvent, loadModule}))
 }
 
 let stdin = process.stdin; // Use the terminal to run JS code
@@ -77,13 +72,10 @@ function watchModule(m) {
 		loadModule(m);
 	});
 }
-(async function loadModules() {
-	await dbPromise;
-	modules.forEach(m => {
-		loadModule(m);
-		watchModule(m);
-	});
-})();
+modules.forEach(m => {
+	loadModule(m);
+	watchModule(m);
+});
 
 bot.on("ready", function() {
 	bot.editStatus("online", {name: defaultPrefix + "help", type: 0});

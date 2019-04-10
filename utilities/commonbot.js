@@ -7,7 +7,7 @@ let warningIgnore = [];
 let DMChannelCache = {};
 
 module.exports = function(input) {
-	let {Discord, bot, cf, bf, db, reloadEvent} = input;
+	let {Discord, bot, cf, bf, reloadEvent} = input;
 	let reactionMenus = {};
 	let messageMenus = [];
 
@@ -279,19 +279,7 @@ module.exports = function(input) {
 			if (!content) content = "";
 			let {callback, additional} = fixCAArgs({c, a});
 			let [actualContent, file] = createSendableObject(content, additional)
-			return new Promise(resolve => {
-				if (additional.mention) {
-					let mention = bf.userObject(additional.mention);
-					db.get("SELECT mention FROM Users WHERE userID = ?", mention.id, function(err, dbr) {
-						if (dbr && dbr.mention == 1) {
-							actualContent.content = mention.mention+" "+actualContent.content;
-						}
-						delete additional.mention;
-						resolve();
-					});
-				} else resolve();
-			})
-			.then(() => bf.resolveChannel(channel))
+			return bf.resolveChannel(channel)
 			.then(channel => {
 				let messages = cf.splitMessage(actualContent.content, 2000);
 				if (channel.guild && actualContent.embed && !actualContent.embed.color) actualContent.embed.color = bf.userToColour(bot.user, channel.guild);
@@ -776,126 +764,9 @@ module.exports = function(input) {
 			return bf.reactionMenu(msg.channel, selectMessage, actions);
 		}
 	}
-	bf.dbRoleList = async function(guild, filter, options) {
-		guild = bf.guildObject(guild);
-		if (!filter) filter = "";
-		let lockedData = await db.all("SELECT Roles.roleID, locker FROM Roles LEFT JOIN Locks ON Roles.roleID = Locks.roleID WHERE guildID = ? GROUP BY Roles.roleID", guild.id);
-		if (options.all) {
-			let map = new Map();
-			let toLock = [];
-			for (let role of guild.roles.values()) {
-				map.set(role.id, {name: role.name, id: role.id});
-			}
-			if (options.locked) {
-				for (let row of lockedData) {
-					let role = map.get(row.roleID);
-					if (role) toLock.push(role);
-				}
-			}
-			var list = cf.smartFilter([...map.values()], "name", filter);
-			if (options.locked) {
-				for (let role of toLock) {
-					role.name += bf.lang.lockedRole;
-				}
-			}
-			if (options.member) {
-				for (let role of list) {
-					if (options.member.roles.includes(role.id)) role.name = "🔸 "+role.name;
-					else role.name = "▪ "+role.name;
-				}
-			}
-		} else {
-			var list = lockedData;
-			list = list.map(row => ({id: row.roleID, name: guild.roles.get(row.roleID).name, locker: row.locker}));
-			list = cf.smartFilter(list, "name", filter);
-			if (options.locked || options.member) {
-				for (let role of list) {
-					if (options.locked) {
-						if (role.locker) role.name += bf.lang.lockedRole;
-					}
-					if (options.member) {
-						if (options.member.roles.includes(role.id)) role.name = "🔸 "+role.name;
-						else role.name = "▪ "+role.name;
-					}
-				}
-			}
-		}
-		return list;
-	}
 	bf.checkMemberManageServer = function(member) {
 		return member.guild.ownerID == member.id || member.permission.has("manageServer") || member.permission.has("administrator")
 	}
-
-	class InlineRoleListGeneric {
-		constructor(msg) {
-			this.msg = msg;
-			this.messages = {};
-		}
-		setMessages(object) {
-			Object.assign(this.messages, object);
-		}
-		async getPrevious() {
-			return ["Generic", "Previous", "List"];
-		}
-		setNew() {
-			return bf.sendMessage(this.msg.channel, "Generic new list");
-		}
-		async go(roleNames) {
-			if (roleNames[0].length <= 1) return bf.sendMessage(this.msg.channel, `You must name a role to modify. See ${command.prefix}help ${command.name} for more details.`);
-			let roles = [];
-			for (let name of roleNames) {
-				let possibles = [];
-				possibles = this.msg.guild.roles.filter(r => r.name == name);
-				if (possibles.length == 0) possibles = this.msg.guild.roles.filter(r => r.name.toLowerCase() == name.toLowerCase());
-				if (possibles.length == 0) possibles = this.msg.guild.roles.filter(r => r.name.toLowerCase().startsWith(name.toLowerCase()));
-				if (possibles.length == 0) return bf.sendMessage(this.msg.channel, "Couldn't find any matches for `"+name+"`. Maybe you misspelled it?");
-				if (possibles.length > 1 && !command.flags.on.includes("a")) return bf.sendMessage(this.msg.channel, "Found multiple matches for `"+name+"`. Could you be more specific?\nAdd `+a` to your command to override this warning and select all matches.");
-				roles = roles.concat(possibles);
-			}
-			let output = this.messages.pre ? this.messages.pre(roles[0].name)+"\n\n" : "";
-			let previousRoles = await this.getPrevious(roles);
-			output += previousRoles.length
-			? this.messages.previousRemove+previousRoles.map(r => "`"+r.name+"`").join(", ")+"\n"
-			: this.messages.previousNone+"\n"
-			output += roles.length >= 2
-			? this.messages.newAdded+roles.slice(1).map(r => "`"+r.name+"`").join(", ")+"\n\n"
-			: this.messages.newNone+"\n\n"
-			output += this.messages.post || "";
-			bf.reactionMenu(this.msg.channel, output, [
-				{emoji: bf.buttons.tick, ignore: "total", allowedUsers: [this.msg.author.id], actionType: "js", actionData: async () => {
-					await this.setNew(roles);
-					bf.sendMessage(this.msg.channel, "Done.");
-				}}
-			]);
-		}
-	}
-	class InlineRoleListLocker extends InlineRoleListGeneric {
-		constructor(msg, roleNames) {
-			super(msg, roleNames);
-			this.setMessages({
-				pre: name => "The role `"+name+"` will be modified as follows:",
-				previousRemove: "These previously existing locks will be removed: ",
-				previousNone: "There are no locks currently in place.",
-				newAdded: "These new locks will be added: ",
-				newNone: "No new locks will be added.",
-				post:
-					"As always, the locked role will only be able to be self-assigned by people with one or more of its locking roles.\n"+
-					`If this is what you want, press ${bf.buttons.tick}.`
-			});
-		}
-		getPrevious(roles) {
-			return db.all("SELECT locker FROM Locks WHERE roleID = ?", roles[0].id).then(rows => {
-				return rows.map(row => this.msg.guild.roles.get(row.locker));
-			});
-		}
-		async setNew(roles) {
-			await db.run("DELETE FROM Locks WHERE roleID = ?", roles[0].id);
-			return Promise.all(roles.slice(1).map(role => {
-				db.run("INSERT INTO Locks VALUES (?, ?)", [roles[0].id, role.id]);
-			}));
-		}
-	}
-	Object.assign(bf, {InlineRoleListGeneric, InlineRoleListLocker});
 
 	Discord.User.prototype.__defineGetter__("tag", function() {
 		return this.username+"#"+this.discriminator;

@@ -10,7 +10,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "eris": "^0.9.0",
-    "sqlite": "^3.0.0"
+    "eris": "^0.9.0"
   }
 }
