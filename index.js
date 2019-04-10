@@ -25,13 +25,16 @@ let modules = [ // Load these modules on startup and on change
 	},{
 		filename: __dirname+"/utilities/ids.js",
 		dest: "common"
+	},{
+		filename: __dirname+"/utilities/db.js",
+		dest: "bot framework"
 	}
 ];
 fs.readdirSync(__dirname+"/commands").forEach(filename => {
 	if (filename.endsWith(".js")) modules.push({filename: __dirname+"/commands/"+filename, dest: "bot commands"});
 });
 
-let bot = new Discord(token); // Log in bot
+let bot = new Discord.Client(token); // Log in bot
 function log(data, type) {
 	if (cf.log) cf.log(data, type);
 	else console.log(data);
@@ -42,19 +45,6 @@ const destinations = {
 	"bot framework": filename => Object.assign(bf, require(filename)({Discord, bot, cf, bf, reloadEvent, loadModule})),
 	"bot commands": filename => Object.assign(bc, require(filename)({Discord, bot, cf, bf, bc, reloadEvent, loadModule}))
 }
-
-let stdin = process.stdin; // Use the terminal to run JS code
-stdin.on("data", async function(input) {
-	input = input.toString();
-	//log(`Running "${input}"`);
-	try { // Attempt to run input
-		let result = eval(input);
-		let output = await cf.stringifyAsync(result, false);
-		log(output, "responseInfo");
-	} catch (e) { // Failed
-		log("Error in eval.\n"+e.stack, "responseError");
-	}
-});
 
 // Load modules on bot start and when they are modified
 function loadModule(m) {
@@ -122,3 +112,22 @@ function checkMessage(msg) {
 }
 
 bot.connect();
+
+let db = new bf.db.class();
+bot.once("ready", () => {
+	db.connect("565467535881797647");
+	console.log("Connected to DBcord");
+});
+
+let stdin = process.stdin; // Use the terminal to run JS code
+stdin.on("data", async function(input) {
+	input = input.toString();
+	//log(`Running "${input}"`);
+	try { // Attempt to run input
+		let result = eval(input);
+		let output = await cf.stringifyAsync(result, false);
+		log(output, "responseInfo");
+	} catch (e) { // Failed
+		log("Error in eval.\n"+e.stack, "responseError");
+	}
+});
