@@ -116,6 +116,7 @@ bot.connect();
 let db = new bf.db.class();
 bot.once("ready", () => {
 	db.connect("565467535881797647");
+	db.registerNames("names");
 	console.log("Connected to DBcord");
 });
 
