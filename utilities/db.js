@@ -28,6 +28,32 @@ module.exports = function(passthrough) {
 			 */
 			this.guild = bf.guildObject(guild);
 			this.connected = true;
+
+			cf.log("Registering DBcord state events", "spam");
+			/**
+			 * @param {Discord.Message} message
+			 */
+			const messageAddCacheListener = message => {
+				if (message.guild.id == this.guild.id && message.content) {
+					console.log("Caching: "+message.content);
+					this.cacheMessage(message);
+				}
+			}
+			bot.on("messageCreate", messageAddCacheListener);
+			bot.on("messageUpdate", messageAddCacheListener);
+			/**
+			 * @param {Discord.Message} message
+			 */
+			const messageRemoveCacheListener = arr => {
+				if (!(arr instanceof Array)) arr = [arr];
+				arr.forEach(message => {
+					console.log("Uncaching: "+message.content);
+					this.uncacheMessage(message);
+				});
+			}
+			bot.on("messageDelete", messageRemoveCacheListener);
+			bot.on("messageBulkDelete", messageRemoveCacheListener);
+
 			return this;
 		}
 
@@ -196,6 +222,10 @@ module.exports = function(passthrough) {
 			this.messageCache.add(message, undefined, true);
 		}
 
+		uncacheMessage(message) {
+			this.messageCache.remove(message);
+		}
+
 		filter(channel, options = {}) {
 			let channelObject = this.resolveChannel(channel);
 			if (!options.limit) options.limit = 100;
@@ -240,7 +270,6 @@ module.exports = function(passthrough) {
 				return bot.editMessage(channelObject.id, item[0], this.serialiseData(item.slice(1)))
 			})).then(messages => {
 				return messages.map(m => {
-					this.messageCache.add(m, undefined, true);
 					return this.deserialiseMessage(m);
 				});
 			});
@@ -250,7 +279,6 @@ module.exports = function(passthrough) {
 			let channelObject = this.resolveChannel(channel);
 			return this.filter(channel, options).then(messages => {
 				return bot.deleteMessages(channelObject.id, messages.map(m => {
-					this.messageCache.delete(m.messageID);
 					return m.messageID;
 				}));
 			});
