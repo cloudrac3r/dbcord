@@ -26,6 +26,9 @@ let modules = [ // Load these modules on startup and on change
 		filename: __dirname+"/utilities/ids.js",
 		dest: "common"
 	},{
+		filename: __dirname+"/utilities/parser.js",
+		dest: "common"
+	},{
 		filename: __dirname+"/utilities/db.js",
 		dest: "bot framework"
 	}

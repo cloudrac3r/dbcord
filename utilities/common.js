@@ -291,8 +291,7 @@ module.exports = {
 		return fragments;
 	},
 	// Stringify with promises.
-	stringifyAsync: async function(data, formatting, depth) {
-		if (!depth) depth = 0;
+	stringifyAsync: async function(data, formatting, depth = 2) {
 		let result;
 		if (data === undefined) result = "(undefined)";
 		else if (data === null) result = "(null)";

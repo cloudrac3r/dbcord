@@ -6,7 +6,12 @@ const Discord = require("eris");
  */
 module.exports = function(passthrough) {
 	const {bot, cf, bf, reloadEvent} = passthrough;
-	
+
+	/**
+	 * @type {import("./parser")}
+	 */
+	const {Parser, SQLParser} = cf;
+
 	if (!bf.db) bf.db = {};
 
 	bf.db.class = class DBcord {
@@ -35,7 +40,7 @@ module.exports = function(passthrough) {
 			 */
 			const messageAddCacheListener = message => {
 				if (message.guild.id == this.guild.id && message.content) {
-					console.log("Caching: "+message.content);
+					console.log(`Caching ${message.id}: ${message.content}`);
 					this.cacheMessage(message);
 				}
 			}
@@ -47,7 +52,7 @@ module.exports = function(passthrough) {
 			const messageRemoveCacheListener = arr => {
 				if (!(arr instanceof Array)) arr = [arr];
 				arr.forEach(message => {
-					console.log("Uncaching: "+message.content);
+					console.log(`Uncaching ${message.id}: ${message.content}`);
 					this.uncacheMessage(message);
 				});
 			}
@@ -161,6 +166,7 @@ module.exports = function(passthrough) {
 							comparison: comparison operator
 							?transform: operation to perform on row before comparing
 						*/
+						if (filter.raw) filter = filter.raw;
 						if (typeof(filter) == "string") { // e.g. `name == Cadence`
 							let split = filter.split(" ");
 							filter = {
@@ -300,100 +306,41 @@ module.exports = function(passthrough) {
 		 * @param {String} input
 		 */
 		query(input) {
-			let words = input.split(" ");
-			// What operation will be performed? We can do select, insert, update, delete
-			let operation = words.shift().toLowerCase();
-			// Select
-			// Example: select thing, quality from cool-channel where quality = good limit 5
-			if (operation == "select") {
-				let options = {};
-				// Which fields will we select?
-				options.return = [];
-				while (words[0] != "from") {
-					let field = words.shift();
-					field = field.replace(/,$/, "");
-					if (field != "*") options.return.push(field);
+			let parser = new SQLParser(input);
+			let statement = parser.parseStatement();
+			if (statement.operation == "select") {
+				let options = statement.options;
+				if (statement.fields && !statement.fields.includes("*")) {
+					if (statement.fields.length == 1) options.return = statement.fields[0];
+					else options.return = statement.fields;
 				}
-				// Normalise
-				if (options.return.length == 0) delete options.return;
-				else if (options.return.length == 1) options.return = options.return[0];
-				// Next word should be "from".
-				words.shift();
-				// Which channel will we select from?
-				let channel = words.shift();
-				// Just the options left. We'll accept them in any order.
-				while (words.length) { // While there's still options to collect...
-					// What option are we processing?
-					let optype = words.shift().toLowerCase();
-					// Limit
-					if (optype == "limit") {
-						// How many are we limiting to?
-						options.limit = +words.shift();
-					}
-					// Where
-					else if (optype == "where") {
-						// We'll just pass the filter directly in.
-						if (!options.filters) options.filters = [];
-						options.filters.push(words.splice(0, 3).join(" "));
-					}
-					// Single
-					else if (optype == "single") {
-						// Return first row only.
-						options.single = true;
-					}
-					// Unknown option
-					else {
-						throw new Error("Unknown query optype: "+optype);
+				return this.get(statement.table, options);
+			} else if (statement.operation == "insert") {
+				let channelObject = this.resolveChannel(statement.table);
+				if (statement.fields.length == 0) {
+					var data = statement.values;
+				} else {
+					let fields = this.names.get(channelObject.id).fields;
+					var data = new Array(fields.length).fill();
+					for (let fieldStatIndex = 0; fieldStatIndex < statement.fields.length; fieldStatIndex++) {
+						let fieldStorageIndex = fields.indexOf(statement.fields[fieldStatIndex]);
+						if (fieldStorageIndex == -1) throw new Error("Trying to insert into named field "+statement.fields[fieldStatIndex]+" in channel "+statement.table+", but field does not exist");
+						else data[fieldStorageIndex] = statement.values[fieldStatIndex];
 					}
 				}
-				return this.get(channel, options);
-			}
-			// Insert
-			// Example: insert into cool-channel values ["water", "is", "good"]
-			else if (operation == "insert") {
-				// Next word should be "into".
-				words.shift();
-				// Which channel will we insert into?
-				let channel = words.shift();
-				// Next word should be "values".
-				words.shift();
-				// Rest of the string is an array of values.
-				let rest = words.join(" ");
-				let values = JSON.parse(rest);
-				this.add(channel, values);
-			}
-			// Update
-			else if (operation == "update") {
-				throw new Error("Update not yet implemented");
-				// Which channel will we update in?
-				let channel = words.shift();
-				// Next word should be set
-				words.shift();
-				// What will we set?
+				return this.add(statement.table, data);
+			} else if (statement.operation == "update") {
 				let fields = [];
 				let values = [];
-				while (words[0].toLowerCase() != "where") {
-					fields.push(words[0]);
-				}
-			}
-			// Delete
-			else if (operation == "delete") {
-				// Next word should be "from".
-				words.shift();
-				// Which channel will we delete from?
-				let channel = words.shift();
-				// What will we delete? Loop until we run out of conditions.
-				let options = {};
-				while (words.length && words.shift().toLowerCase() == "where") {
-					words.slice();
-					if (!options.filter) options.filters = [];
-					options.filters.push(words.splice(0, 3).join(" "));
-				}
-				this.delete(channel, options);
-			}
-			// Unknown operation
-			else {
-				throw new Error("Unknown query operation: "+operation);
+				statement.assignments.forEach(a => {
+					fields.push(a.name);
+					values.push(a.value);
+				});
+				return this.update(statement.table, statement.options, fields, values);
+			} else if (statement.operation == "delete") {
+				return this.delete(statement.table, statement.options);
+			} else {
+				throw new Error("Unknown query operation: "+statement.operation);
 			}
 		}
 
