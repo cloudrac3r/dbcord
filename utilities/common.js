@@ -1,4 +1,5 @@
 const util = require("util");
+const readline = require("readline");
 
 Map.prototype.toObject = function() {
 	let array = [...this];
@@ -20,11 +21,22 @@ Array.prototype.shuffle = function() {
 module.exports = {
 	// Log a message to console with a prefix
 	log: function(text, severity) {
+		const stdout = process.stdout;
 		let prefixes = {"error": "[#]", "warning": "[!]", "info": "[.]", "spam": "[ ]", "unknown": "[?]", "responseInfo": "( )", "responseError": "(!)"}; // Names and types of logging
 		text = module.exports.stringify(text, true);
 		let prefix = (prefixes[severity] || prefixes.unknown)+" ["+module.exports.getSixTime()+"] ";
-		text = text.replace(/\n/g, "\n"+prefix.replace(/([[(]).([\])])/, "$1^$2")); // Deal with newlines (prefix each line)
-		console.log(prefix+text);
+		let width = stdout.columns;
+		let result = "";
+		text.split("\n").forEach((line, index, array) => {
+			while (line.length) {
+				result += prefix+line.slice(0, width-prefix.length)+"\n";
+				line = line.slice(width-prefix.length);
+			}
+		});
+		//text = text.replace(/\n/g, "\n"+prefix.replace(/([[(]).([\])])/, "$1^$2")); // Deal with newlines (prefix each line)
+		readline.clearLine(stdout);
+		readline.cursorTo(stdout, 0, null);
+		stdout.write(result);
 	},
 	// Given a time, return "HHMMSS"
 	getSixTime: function(when, seperator) {
@@ -291,7 +303,8 @@ module.exports = {
 		return fragments;
 	},
 	// Stringify with promises.
-	stringifyAsync: async function(data, formatting, depth = 2) {
+	stringifyAsync: async function(data, formatting, depth = 1) {
+		let useDepth = true;
 		let result;
 		if (data === undefined) result = "(undefined)";
 		else if (data === null) result = "(null)";
@@ -307,8 +320,8 @@ module.exports = {
 			if (formatting) result = "```\n"+data.stack+"``` "+(await module.exports.stringify(errorObject));
 			else result = ""+data.stack+(await module.exports.stringify(errorObject));
 		} else {
-			if (formatting) result = "```js\n"+util.inspect(data, { depth: depth })+"```";
-			else result = ""+util.inspect(data, { depth: depth });
+			if (formatting) result = "```js\n"+util.inspect(data, useDepth && { depth: depth })+"```";
+			else result = ""+util.inspect(data, useDepth && { depth: depth });
 		}
 
 		if (result.length >= 2000) {

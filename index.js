@@ -31,6 +31,9 @@ let modules = [ // Load these modules on startup and on change
 	},{
 		filename: __dirname+"/utilities/db.js",
 		dest: "bot framework"
+	},{
+		filename: __dirname+"/utilities/stdin.js",
+		dest: "bot framework"
 	}
 ];
 fs.readdirSync(__dirname+"/commands").forEach(filename => {
@@ -117,21 +120,9 @@ function checkMessage(msg) {
 bot.connect();
 
 let db = new bf.db.class();
+global.db = db;
 bot.once("ready", () => {
 	db.connect("565467535881797647");
 	db.registerNames("names");
 	cf.log("Connected to DBcord", "info");
-});
-
-let stdin = process.stdin; // Use the terminal to run JS code
-stdin.on("data", async function(input) {
-	input = input.toString();
-	//log(`Running "${input}"`);
-	try { // Attempt to run input
-		let result = eval(input);
-		let output = await cf.stringifyAsync(result, false);
-		log(output, "responseInfo");
-	} catch (e) { // Failed
-		log("Error in eval.\n"+e.stack, "responseError");
-	}
 });
