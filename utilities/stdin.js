@@ -31,6 +31,7 @@ let lastBuf = "";
 let pastIndex = -1;
 let newSessionLine = "";
 let cursorPos = 0;
+let pastExtraLines = 0;
 
 const sleep = ms => new Promise(resolve => setTimeout(() => resolve(), ms));
 
@@ -134,20 +135,35 @@ module.exports = passthrough => {
 		}
 
 		// Draw current line
-		let lineDifference = Math.floor(cursorPos/stdout.columns) - Math.floor(oldCursorPos/stdout.columns);
-		if (lineDifference > 0) stdout.write("\n".repeat(lineDifference));
-		else if (lineDifference < 0) {
-			for (let i = lineDifference; i < 0; i++) {
-				readline.clearLine(stdout);
-				readline.moveCursor(stdout, 0, -1);
-			}
+		// + Reset cursor to start point
+		let linesFromStart = Math.floor(oldCursorPos/stdout.columns);
+		let linesToEnd = Math.floor(input.length/stdout.columns);
+		// If the cursor has moved from the start of one line to the end of the previous line as the result of a deletion,
+		// set rolledBack to the number of lines moved.
+		let oldRow = Math.floor(oldCursorPos/stdout.columns);
+		let newRow = Math.floor(cursorPos/stdout.columns);
+		let rolledBack = Math.max(oldRow-newRow, 0);
+		// Move downwards
+		for (let i = 0; i < linesToEnd-linesFromStart; i++) {
+			stdout.write("\n");
+		}
+		// Move upwards and clear
+		for (let i = 0; i < linesToEnd+rolledBack; i++) {
+			readline.clearLine(stdout);
+			readline.moveCursor(stdout, 0, -1);
 		}
 		readline.clearLine(stdout);
-		readline.moveCursor(stdout, 0, Math.min(0, -Math.floor((input.length)/stdout.columns)));
-		readline.cursorTo(stdout, 0, null);
+		stdout.write("\r");
+		// + Write current command
 		stdout.write(input);
-		readline.cursorTo(stdout, cursorPos % stdout.columns, null);
-		if (cursorPos % stdout.columns == 0 && input.length != 0) stdout.write("\n");
+		// + Move cursor for visual aid
+		// Move to next line if hanging past last column
+		if (input.length % stdout.columns == 0 && input.length != 0) stdout.write("\n");
+		// Move to start
+		readline.moveCursor(stdout, 0, -linesToEnd);
+		readline.cursorTo(stdout, 0, null);
+		// Move to cursorPos
+		readline.moveCursor(stdout, cursorPos % stdout.columns, Math.floor(cursorPos/stdout.columns));
 
 		// Process command
 		if (charString == "\r") {
@@ -174,12 +190,13 @@ module.exports = passthrough => {
 					return !reachedStackBottom;
 				}).join("\n");
 				log(filteredStack, "responseError");
-				cursorPos = 0;
 			}
-			pastCommands.unshift(input);
+			pastCommands = pastCommands.filter(p => p != input);
+			if (input.trim().length) pastCommands.unshift(input);
 			input = "";
 			newSessionLine = "";
 			pastIndex = -1;
+			cursorPos = 0;
 		}
 	});
 }
