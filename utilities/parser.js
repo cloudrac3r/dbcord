@@ -150,6 +150,56 @@ class SQLParser extends Parser {
 				// Return first row only.
 				options.single = true;
 			}
+			// Join
+			else if (["left", "right", "inner", "outer"].includes(optype)) {
+				if (!options.joins) options.joins = [];
+				// SELECT * FROM Purchases WHERE purchaseID = 2 INNER JOIN PurchaseItems ON Purchases.purchaseID = PurchaseItems.purchaseID
+				// SELECT * FROM Purchases WHERE purchaseID = 2 INNER JOIN PurchaseItems USING (purchaseID)
+				// Left, right, inner, outer
+				let direction = optype;
+				// Join
+				this.expect("join", {transform: tf.lc});
+				// Table
+				let target = this.get();
+				// Mode (on/using)
+				let mode = this.get({transform: tf.lc});
+				if (mode == "using") {
+					this.swallow("(");
+					let field = this.extractValue().value;
+					this.swallow(")");
+					var fields = new Array(2).fill({
+						table: null,
+						field
+					});
+				} else if (mode == "on") {
+					var fields = [];
+					const extractCombo = () => {
+						// Extract from Table.field
+						let value = this.extractValue().value;
+						let fragments = value.split(".");
+						// Field only
+						if (fragments.length == 1) {
+							return {
+								table: null,
+								field: fragments[0]
+							}
+						}
+						// Table.field
+						else {
+							return {
+								table: fragments[0],
+								field: fragments[1]
+							}
+						}
+					}
+					fields.push(extractCombo());
+					this.expect("=");
+					fields.push(extractCombo());
+				} else {
+					throw new Error("Invalid join mode: "+mode);
+				}
+				options.joins.push({direction, target, fields});
+			}
 			// Unknown option
 			else {
 				throw new Error("Unknown query optype: "+optype);
