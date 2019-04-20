@@ -167,10 +167,10 @@ class SQLParser extends Parser {
 					this.swallow("(");
 					let field = this.extractValue().value;
 					this.swallow(")");
-					var fields = new Array(2).fill({
+					var fields = new Array(2).fill().map(() => ({
 						table: null,
 						field
-					});
+					}));
 				} else if (mode == "on") {
 					var fields = [];
 					const extractCombo = () => {

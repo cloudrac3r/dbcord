@@ -25,12 +25,16 @@ module.exports = {
 		let prefixes = {"error": "[#]", "warning": "[!]", "info": "[.]", "spam": "[ ]", "unknown": "[?]", "responseInfo": "( )", "responseError": "(!)"}; // Names and types of logging
 		text = module.exports.stringify(text, true);
 		let prefix = (prefixes[severity] || prefixes.unknown)+" ["+module.exports.getSixTime()+"] ";
+		let upPrefix = prefix[0] + "^" + prefix.slice(2);
 		let width = stdout.columns;
 		let result = "";
+		let useUpPrefix = false;
 		text.split("\n").forEach((line, index, array) => {
 			while (line.length) {
-				result += prefix+line.slice(0, width-prefix.length)+"\n";
-				line = line.slice(width-prefix.length);
+				let linePrefix = useUpPrefix ? upPrefix : prefix;
+				result += linePrefix+line.slice(0, width-linePrefix.length)+"\n";
+				line = line.slice(width-linePrefix.length);
+				useUpPrefix = true;
 			}
 		});
 		//text = text.replace(/\n/g, "\n"+prefix.replace(/([[(]).([\])])/, "$1^$2")); // Deal with newlines (prefix each line)

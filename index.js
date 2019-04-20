@@ -124,5 +124,5 @@ global.db = db;
 bot.once("ready", () => {
 	db.connect("565467535881797647");
 	db.registerNames("names");
-	cf.log("Connected to DBcord", "info");
+	log("Connected to DBcord", "info");
 });

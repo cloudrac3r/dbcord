@@ -146,12 +146,24 @@ module.exports = function(passthrough) {
 			throw new Error("Invalid data for channel: "+channel);
 		}
 
+		filterReturn(dsm, options) {
+			if (options.return) {
+				if (typeof(options.return) == "string") {
+					dsm = dsm.map(arr => arr[options.return]);
+				} else {
+					dsm = dsm.map(arr => options.return.map(op => arr[op]));
+				}
+			}
+			return dsm;
+		}
+
 		/**
 		 * Get a bunch of messages matching input criteria. Searches the internal storage first, but requests more if needed.
 		 * @returns {Promise<Discord.Message[]>}
 		 */
 		async getMessages(channel, options = {}, pointer = {}) {
 			if (options.single) options.limit = 1;
+			if (options.ignoreBadFiterIndexes == undefined) options.ignoreBadFiterIndexes = true;
 			let channelObject = this.resolveChannel(channel);
 			let messages = this.messageCache.filter(m => m.channel.id == channelObject.id);
 			if (pointer && pointer.id) {
@@ -172,15 +184,22 @@ module.exports = function(passthrough) {
 						if (filter.raw) filter = filter.raw;
 						if (typeof(filter) == "string") { // e.g. `name == Cadence`
 							let split = filter.split(" ");
+							let nameFragments = split[0].split(".");
 							filter = {
-								index: split[0],
+								index: nameFragments.slice(-1)[0],
+								table: nameFragments.length > 1 ? nameFragments[0] : undefined,
 								value: split[2],
 								comparison: split[1]
 							}
 						}
+						// Quit if table doesn't match
+						if (filter.table !== undefined && filter.table != channelObject.name) return true;
+						// Quit if index doesn't exist
 						let rowValue = item[filter.index];
+						if (rowValue === undefined) return options.ignoreBadFiterIndexes;
 						let filterValue = filter.value;
 						if (filter.transform) rowValue = filter.transform(rowValue);
+						// Do comparison
 						if (filter.comparison == "=" || filter.comparison == "==") return rowValue == filterValue;
 						else if (filter.comparison == "<") return rowValue < filterValue;
 						else if (filter.comparison == ">") return rowValue > filterValue;
@@ -192,13 +211,7 @@ module.exports = function(passthrough) {
 				});
 			}
 			if (messages.length >= options.limit || this.completedChannels.has(channel.id)) {
-				if (options.return) {
-					if (typeof(options.return) == "string") {
-						dsm = dsm.map(arr => arr[options.return]);
-					} else {
-						dsm = dsm.map(arr => options.return.map(op => arr[op]));
-					}
-				}
+				dsm = this.filterReturn(dsm, options);
 				if (options.single) return dsm[0];
 				else return dsm.slice(0, options.limit);
 			}
@@ -238,7 +251,68 @@ module.exports = function(passthrough) {
 		filter(channel, options = {}) {
 			let channelObject = this.resolveChannel(channel);
 			if (!options.limit) options.limit = 100;
-			return this.getMessages(channelObject, options, options.pointer || undefined);
+			if (!options.joins) return this.getMessages(channelObject, options, options.pointer || undefined);
+			else {
+				let fetchOptions = {filters: options.filters};
+				let promises = [];
+				// Get messages for first channel
+				promises.push(this.getMessages(channelObject, fetchOptions));
+				// Set up all join objects
+				options.joins.forEach(join => {
+					join.target = this.resolveChannel(join.target);
+					join.fields.forEach((field, index) => {
+						if (field.table == null) {
+							if (index == 0) field.table = channelObject;
+							else field.table = this.resolveChannel(join.target);
+						} else if (typeof(field.table) != "object") {
+							field.table = this.resolveChannel(field.table);
+						}
+					});
+				});
+				// Get messages for all joined channels
+				options.joins.forEach(join => {
+					promises.push(this.getMessages(join.target, fetchOptions).then(messages => join.messages = messages));
+				});
+				return Promise.all(promises).then(arr => {
+					// messages = current set of content arrays from joins so far
+					let messages = arr[0];
+					// Loop over each join
+					while (options.joins.length) {
+						/**
+						 * @type {Object}
+						 * @prop {String} direction inner, left, right, outer
+						 * @prop {ContentArray[]} messages array of content arrays
+						 * @prop {Discord.TextChannel} target
+						 * @prop {Object[]} fields
+						 * @prop {String} fields.field field name to join on
+						 * @prop {Discord.TextChannel} fields.table channel that the field exists in
+						 */
+						let join = options.joins.shift();
+						// Construct a results array, then later use it to overwrite messages
+						let result = [];
+						if (join.direction == "inner") {
+							messages.forEach(message => {
+								// Get the list of items from the second table to be joined to the current item from the first table
+								let joinableItems = join.messages.filter(item => item[join.fields[1].field] == message[join.fields[0].field]);
+								joinableItems.forEach(toJoin => {
+									let newItem = Object.assign([], message);
+									Object.entries(toJoin).forEach(entry => {
+										if (entry[0].match(/^\d+$/)) entry[0] = +entry[0] + message.length;
+										newItem[entry[0]] = entry[1];
+									});
+									result.push(newItem);
+								});
+							});
+						}
+						// Result array is complete, now overwrite messages and go to the next join
+						messages = result;
+					}
+					messages = this.filterReturn(messages, options);
+					if (options.single) return messages[0];
+					else if (options.limit) return messages.slice(0, options.limit);
+					else return messages;
+				});
+			}
 		}
 
 		fetchChannel(channel) {
