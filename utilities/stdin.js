@@ -13,6 +13,7 @@ const comp = {
 	"CtrlL": Buffer.from([0x0c]),
 	"CtrlLeft": Buffer.from([0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x44]),
 	"CtrlRight": Buffer.from([0x1b, 0x5b, 0x31, 0x3b, 0x35, 0x43]),
+	"CtrlBackspace": Buffer.from([0x17]),
 	"left": Buffer.from([0x1b, 0x5b, 0x44]),
 	"right": Buffer.from([0x1b, 0x5b, 0x43]),
 	"up": Buffer.from([0x1b, 0x5b, 0x41]),
@@ -77,7 +78,7 @@ module.exports = passthrough => {
 			if (cursorPos > 0) cursorPos--;
 		} else if (charBuf.equals(comp.right)) {
 			if (cursorPos < input.length-1) cursorPos++;
-		} else if (charBuf.equals(comp.CtrlLeft)) {
+		} else if (charBuf.equals(comp.CtrlLeft) || charBuf.equals(comp.CtrlBackspace)) {
 			if (cursorPos == 0) return;
 			const spaceChars = " \t";
 			const symbolChars = `~\`!@#$%^&*()-_=+[{]}\\|;:'",<.>/?`;
@@ -96,6 +97,7 @@ module.exports = passthrough => {
 				}
 			}
 			cursorPos++;
+			if (charBuf.equals(comp.CtrlBackspace)) input = input.slice(0, cursorPos) + input.slice(oldCursorPos);
 		} else if (charBuf.equals(comp.CtrlRight)) {
 			const spaceChars = " \t";
 			const symbolChars = `~\`!@#$%^&*()-_=+[{]}\\|;:'",<.>/?`;
