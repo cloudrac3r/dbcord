@@ -52,8 +52,11 @@ module.exports = function(passthrough) {
 			const messageRemoveCacheListener = arr => {
 				if (!(arr instanceof Array)) arr = [arr];
 				arr.forEach(message => {
-					console.log(`Uncaching ${message.id}: ${message.content}`);
-					this.uncacheMessage(message);
+					if (message.id && this.messageCache.has(message.id)) {
+						message = this.messageCache.get(message.id);
+						console.log(`Uncaching ${message.id}: ${message.content}`);
+						this.uncacheMessage(message);
+					}
 				});
 			}
 			bot.on("messageDelete", messageRemoveCacheListener);
@@ -131,12 +134,12 @@ module.exports = function(passthrough) {
 			else if (channel.constructor.name.includes("Channel")) return channel;
 			else if (typeof(channel) == "string") {
 				if (isNaN(+channel)) {
-					channel = this.guild.channels.find(c => c.type == 0 && c.name == channel);
-					if (channel) return channel;
+					let result = this.guild.channels.find(c => c.type == 0 && c.name == channel);
+					if (result) return result;
 					throw new Error("Channel name couldn't be resolved: "+channel);
 				} else {
-					channel = this.guild.channels.get(channel);
-					if (channel) return channel;
+					let result = this.guild.channels.get(channel);
+					if (result) return result;
 					throw new Error("Channel ID couldn't be resolved: "+channel);
 				}
 			}
