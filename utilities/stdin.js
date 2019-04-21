@@ -131,7 +131,8 @@ module.exports = passthrough => {
 
 		// Operate on string
 		let charString = charBuf.toString();
-		if (addToInput) {
+		if (addToInput && charString != "\r") {
+			charString = charString.replace(/(\r|\n)/g, "");
 			input = input.slice(0, cursorPos) + charString + input.slice(cursorPos);
 			cursorPos += charString.length;
 		}
@@ -158,14 +159,20 @@ module.exports = passthrough => {
 		stdout.write("\r");
 		// + Write current command
 		stdout.write(input);
+
 		// + Move cursor for visual aid
 		// Move to next line if hanging past last column
 		if (input.length % stdout.columns == 0 && input.length != 0) stdout.write("\n");
 		// Move to start
 		readline.moveCursor(stdout, 0, -linesToEnd);
 		readline.cursorTo(stdout, 0, null);
-		// Move to cursorPos
-		readline.moveCursor(stdout, cursorPos % stdout.columns, Math.floor(cursorPos/stdout.columns));
+		if (charString != "\r") {
+			// Move to cursorPos
+			readline.moveCursor(stdout, cursorPos % stdout.columns, Math.floor(cursorPos/stdout.columns));
+		} else {
+			// Move to bottom
+			readline.moveCursor(stdout, 0, linesToEnd);
+		}
 
 		// Process command
 		if (charString == "\r") {
