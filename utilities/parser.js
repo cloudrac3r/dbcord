@@ -137,7 +137,7 @@ class SQLParser extends Parser {
 			// Limit
 			if (optype == "limit") {
 				// How many are we limiting to?
-				options.limit = +words.shift();
+				options.limit = +this.get();
 			}
 			// Where
 			else if (optype == "where") {

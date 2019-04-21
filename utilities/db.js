@@ -18,7 +18,8 @@ module.exports = function(passthrough) {
 		constructor() {
 			this.connected = false;
 			bf.db.instances.push(this);
-			this.completedChannels = new Set();
+			this.channelCompletion = new Map();
+			this.channelRequests = new Map();
 			this.messageCache = new Discord.Collection(Discord.Message);
 			/**
 			 * @type {Map<String>} <channel ID the names apply to, \{channelID: where the names are stored, fields: \[the names\]\}>
@@ -161,15 +162,11 @@ module.exports = function(passthrough) {
 		 * Get a bunch of messages matching input criteria. Searches the internal storage first, but requests more if needed.
 		 * @returns {Promise<Discord.Message[]>}
 		 */
-		async getMessages(channel, options = {}, pointer = {}) {
+		async getMessages(channel, options = {}) {
 			if (options.single) options.limit = 1;
 			if (options.ignoreBadFiterIndexes == undefined) options.ignoreBadFiterIndexes = true;
 			let channelObject = this.resolveChannel(channel);
 			let messages = this.messageCache.filter(m => m.channel.id == channelObject.id);
-			if (pointer && pointer.id) {
-				if (pointer.below) messages = messages.filter(m => m.id <= pointer.id);
-				else messages = messages.filter(m => m.id >= pointer.id);
-			}
 			let dsm = messages.map(m => this.deserialiseMessage(m));
 			if (options.filter) options.filters = [options.filter];
 			if (options.filters) {
@@ -216,34 +213,39 @@ module.exports = function(passthrough) {
 					});
 				});
 			}
-			if (messages.length >= options.limit || this.completedChannels.has(channel.id)) {
+			if (messages.length >= options.limit || this.channelCompletion.get(channelObject.id) == 0) {
 				dsm = this.filterReturn(dsm, options);
 				if (options.single) return dsm[0];
 				else return dsm.slice(0, options.limit);
 			}
-			// Not enough messages in cache, so we need more.
-			let fetchPointer = {below: pointer.below, id: 0};
-			if (messages.length) {
-				messages.forEach(m => {
-					if (+m.id > +fetchPointer.id) fetchPointer.id = m.id;
-				});
-			}
-			return this.fetchMessages(channel, fetchPointer).then(() => this.getMessages(channel, options, pointer));
+			return this.fetchMessages(channel).then(() => this.getMessages(channel, options));
 		}
 
 		/**
 		 * Send the messages to the internal storage.
 		 * @returns {Promise<Boolean>} Have we reached the edge of the channel?
 		 */
-		fetchMessages(channel, pointer = {}, limit = 100) {
+		fetchMessages(channel, limit = 100) {
 			let channelObject = this.resolveChannel(channel);
-			if (!pointer.id) pointer.id = undefined;
-			if (pointer.below) var promise = channelObject.getMessages(limit, undefined, pointer.id);
-			else var promise = channelObject.getMessages(limit, pointer.id);
-			return promise.then(messages => {
+			// Which point should we fetch from?
+			let pointer = this.channelCompletion.get(channelObject.id);
+			if (pointer == 0) throw new Error("Trying to fetch more messages from a completed channel?");
+			// Is there already a request in progress?
+			let existing = this.channelRequests.get(channelObject.id);
+			if (existing) return existing;
+			// There isn't already a request, so create a new one
+			// Yes, assigning the chained .then _is_ intentional!
+			let request = channelObject.getMessages(limit, pointer).then(messages => {
+				// Request completed, send the results to cache
+				this.channelRequests.delete(channelObject.id);
+				if (messages.length < limit) this.channelCompletion.set(channelObject.id, 0);
+				else this.channelCompletion.set(channelObject.id, messages.slice(-1)[0].id);
+				messages = messages.filter(m => !m.pinned); // filter out index messages
 				messages.forEach(m => this.cacheMessage(m));
-				if (messages.length < limit) this.completedChannels.add(channelObject.id);
 			});
+			// Save the request
+			this.channelRequests.set(channelObject.id, request);
+			return request;
 		}
 
 		cacheMessage(message) {
@@ -256,9 +258,13 @@ module.exports = function(passthrough) {
 
 		filter(channel, options = {}) {
 			let channelObject = this.resolveChannel(channel);
-			if (!options.limit) options.limit = 100;
-			if (!options.joins) return this.getMessages(channelObject, options, options.pointer || undefined);
+			// Normalise limit. Default limit is infinite!
+			if (options.limit == undefined || isNaN(+options.limit)) delete options.limit;
+			else options.limit = +options.limit;
+			// No joins? Super simple!
+			if (!options.joins) return this.getMessages(channelObject, options);
 			else {
+				// Oh god, there's joins.
 				let fetchOptions = {filters: options.filters};
 				let promises = [];
 				// Get messages for first channel
@@ -322,7 +328,7 @@ module.exports = function(passthrough) {
 		}
 
 		fetchChannel(channel) {
-			return this.fetchMessages(channel, {}, Infinity);
+			return this.fetchMessages(channel, Infinity);
 		}
 
 		async registerNames(channel) {
