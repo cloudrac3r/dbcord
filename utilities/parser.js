@@ -143,7 +143,10 @@ class SQLParser extends Parser {
 			else if (optype == "where") {
 				// We'll just pass the filter directly in.
 				if (!options.filters) options.filters = [];
-				options.filters = options.filters.concat(this.collectAssignments(["=", "==", "<", ">", "<=", ">=", "!=", "<>"]));
+				options.filters = options.filters.concat(this.collectAssignments([
+					"=", "==", "<", ">", "<=", ">=", "!=", "<>",
+					"#=", "#<", "#>", "#<=", "#>=", "#!=", "#<>"
+				]));
 			}
 			// Single
 			else if (optype == "single") {

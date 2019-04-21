@@ -199,6 +199,12 @@ module.exports = function(passthrough) {
 						if (rowValue === undefined) return options.ignoreBadFiterIndexes;
 						let filterValue = filter.value;
 						if (filter.transform) rowValue = filter.transform(rowValue);
+						// Check for number comparison
+						if (filter.comparison.startsWith("#")) {
+							filter.comparison = filter.comparison.slice(1);
+							rowValue = +rowValue;
+							filterValue = +filterValue;
+						}
 						// Do comparison
 						if (filter.comparison == "=" || filter.comparison == "==") return rowValue == filterValue;
 						else if (filter.comparison == "<") return rowValue < filterValue;

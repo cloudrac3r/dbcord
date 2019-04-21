@@ -55,8 +55,6 @@ Read the code. I even commented it for you! What a nice person I am!
 ## What features are planned?
 
 - indexing
-- joins
-- data types other than string (?)
 - 200% more epic
 - I probably forgot something SUPER important so open an issue
 
