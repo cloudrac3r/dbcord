@@ -188,7 +188,7 @@ module.exports = passthrough => {
 					else depth = +depth[1];
 				}
 				let result = eval(toRun);
-				let output = await cf.stringifyAsync(result, false, depth);
+				let output = await cf.stringifyAsync(result, false, depth, 4000);
 				log(output, "responseInfo");
 			} catch (e) {
 				let reachedStackBottom = false;

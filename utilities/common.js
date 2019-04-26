@@ -220,7 +220,7 @@ module.exports = {
 				if (c == columns.length-1) {
 					temp.push(i);
 				} else {
-					if (align[c] == "left") {
+					if (align[c] != "right") {
 						temp.push(i.padEnd(length, " "));
 					} else {
 						temp.push(i.padStart(length, " "));
@@ -307,7 +307,7 @@ module.exports = {
 		return fragments;
 	},
 	// Stringify with promises.
-	stringifyAsync: async function(data, formatting, depth = 1) {
+	stringifyAsync: async function(data, formatting, depth = 1, limit = 2000) {
 		let useDepth = true;
 		let result;
 		if (data === undefined) result = "(undefined)";
@@ -328,11 +328,11 @@ module.exports = {
 			else result = ""+util.inspect(data, useDepth && { depth: depth });
 		}
 
-		if (result.length >= 2000) {
+		if (result.length >= limit) {
 			if (result.startsWith("```")) {
-				result = result.slice(0, 1995).replace(/`+$/, "").replace(/\n\s+/ms, "")+"…```";
+				result = result.slice(0, limit-5).replace(/`+$/, "").replace(/\n\s+/ms, "")+"…```";
 			} else {
-				result = result.slice(0, 1998)+"…";
+				result = result.slice(0, limit-2)+"…";
 			}
 		}
 		return result;
