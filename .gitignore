@@ -1,6 +1,7 @@
 # Private files
 /token.js
 /storage
+/utilities/ids.js
 
 # Automatically generated files
 /node_modules
