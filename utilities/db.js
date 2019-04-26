@@ -304,8 +304,20 @@ module.exports = function(passthrough) {
 						let result = [];
 						if (join.direction == "inner") {
 							messages.forEach(message => {
+								let leftKeys = Object.keys(message);
+								let originKey = join.fields[0].field;
+								if (originKey != "*" && !leftKeys.includes(originKey)) {
+									throw new Error("Left table key not found while joining: "+originKey+" (valid keys are "+leftKeys.join(", ")+")");
+								}
 								// Get the list of items from the second table to be joined to the current item from the first table
-								let joinableItems = join.messages.filter(item => item[join.fields[1].field] == message[join.fields[0].field]);
+								let targetKey = join.fields[1].field;
+								let joinableItems = join.messages.filter(item => {
+									let rightKeys = Object.keys(item);
+									if (targetKey != "*" && !rightKeys.includes(targetKey)) {
+										throw new Error("Right table key not found while joining: "+targetKey+" (valid keys are "+rightKeys.join(", ")+")");
+									}
+									return item[targetKey] == message[originKey];
+								});
 								joinableItems.forEach(toJoin => {
 									let newItem = Object.assign([], message);
 									Object.entries(toJoin).forEach(entry => {
