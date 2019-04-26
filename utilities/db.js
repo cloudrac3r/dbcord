@@ -41,7 +41,7 @@ module.exports = function(passthrough) {
 			 * @param {Discord.Message} message
 			 */
 			const messageAddCacheListener = message => {
-				if (message.guild.id == this.guild.id && message.content) {
+				if (message.guild.id == this.guild.id && message.type == 0 && message.content) {
 					console.log(`Caching ${message.id}: ${message.content}`);
 					this.cacheMessage(message);
 				}
@@ -69,40 +69,39 @@ module.exports = function(passthrough) {
 
 		/**
 		 * @param {Array} data
-		 * @param {?String} separator
 		 * @returns {String}
 		 */
-		serialiseData(data, separator) {
+		serialiseData(data, noFormat) {
 			/**
 			 * @type {String[]}
 			 */
 			let dataStrings = data.map(d => String(d));
+			let serial = dataStrings.join("");
+			let first = ";,|:.<>-_+=[]{}";
+			let separator = [...first].find(char => !serial.includes(char)) || "";
 			if (!separator) {
-				let serial = dataStrings.join("");
-				let first = ";,|:.<>-_+=[]{}";
-				separator = [...first].find(char => !serial.includes(char)) || "";
-				if (!separator) {
-					let range = [0x23, 0x7e];
-					let chars = []; // little-endian
-					while (serial.includes(Buffer.from(chars))) {
-						if (chars[0] == range[1]) {
-							let index = 0;
+				let range = [0x23, 0x7e];
+				let chars = []; // little-endian
+				while (serial.includes(Buffer.from(chars))) {
+					if (chars[0] == range[1]) {
+						let index = 0;
+						chars[index]++;
+						while (chars[index] == range[1]) {
+							chars[index] = range[0];
+							index++;
 							chars[index]++;
-							while (chars[index] == range[1]) {
-								chars[index] = range[0];
-								index++;
-								chars[index]++;
-							}
-							if (index == chars.length) {
-								// Full
-								chars.push(range[0]);
-							}
+						}
+						if (index == chars.length) {
+							// Full
+							chars.push(range[0]);
 						}
 					}
-					separator = Buffer.from(chars);
 				}
+				separator = Buffer.from(chars);
 			}
-			return "!"+separator+"!"+dataStrings.join(separator);
+			let prefix = "!"+separator+"!";
+			if (noFormat) return {prefix, separator, dataStrings};
+			else return prefix+dataStrings.join(separator);
 		}
 		
 		/**
@@ -110,6 +109,10 @@ module.exports = function(passthrough) {
 		 * @returns {String[]}
 		 */
 		deserialiseData(data) {
+			if (data[0] == data[1]) {
+				cf.log("Special message encountered, will not deserialise", "warning");
+				return null;
+			}
 			let sepBoundary = data[0];
 			let separator = data.split(sepBoundary)[1];
 			let result = data.slice(separator.length+2).split(separator);
@@ -168,7 +171,11 @@ module.exports = function(passthrough) {
 			if (options.ignoreBadFiterIndexes == undefined) options.ignoreBadFiterIndexes = true;
 			let channelObject = this.resolveChannel(channel);
 			let messages = this.messageCache.filter(m => m.channel.id == channelObject.id);
-			let dsm = messages.map(m => this.deserialiseMessage(m));
+			let dsm = [];
+			messages.forEach(m => {
+				let de = this.deserialiseMessage(m);
+				if (de !== null) dsm.push(de);
+			});
 			if (options.filter) options.filters = [options.filter];
 			if (options.filters) {
 				dsm = dsm.filter(item => {
@@ -241,7 +248,7 @@ module.exports = function(passthrough) {
 				this.channelRequests.delete(channelObject.id);
 				if (messages.length < limit) this.channelCompletion.set(channelObject.id, 0);
 				else this.channelCompletion.set(channelObject.id, messages.slice(-1)[0].id);
-				messages = messages.filter(m => !m.pinned); // filter out index messages
+				messages = messages.filter(m => !m.pinned && m.type == 0); // filter out index messages
 				messages.forEach(m => this.cacheMessage(m));
 			});
 			// Save the request
@@ -476,6 +483,40 @@ module.exports = function(passthrough) {
 			);
 			if (into) return this.add(into, [channelObject.id].concat(schema));
 			throw new Error("Schema does not already exist, and no value for into provided.");
+		}
+
+		/**
+		 * @param {} channel The channel to index
+		 */
+		async createIndex(channel, fields) {
+			const maxLength = 2000 - "!!index\n".length;
+			
+			let channelObject = this.resolveChannel(channel);
+			let items = await this.get(channelObject, {return: fields});
+			items = items.flat();
+			// Number of fields, ...fields, ......data. e.g. 2, name, price, Apple, 3.99, Banana, (etc)
+			let indexData = [fields.length].concat(fields).concat(items);
+			let serial = this.serialiseData(indexData, true);
+			let fragments = [];
+			let current = "";
+			serial.dataStrings.forEach(s => {
+				if (current.length + s.length + serial.separator.length > maxLength) {
+					fragments.push(current);
+					current = "";
+				}
+				if (current.length) s = serial.separator + s;
+				current += s;
+			});
+			fragments.push(current);
+			let prefix = "!!index\n!"+serial.separator+"!";
+			// Make sure the messages are sent in order, and make sure that the messages are pinned in order.
+			let previousPinPromise;
+			while (fragments.length) {
+				let newContents = prefix+fragments.shift();
+				var newMessage = await Promise.all([bf.sendMessage(channelObject, newContents), previousPinPromise]).then(x => x[0]);
+				previousPinPromise = newMessage.pin();
+			}
+			return fragments;
 		}
 	}
 
