@@ -16,6 +16,7 @@ module.exports = function(passthrough) {
 
 	bf.db.class = class DBcord {
 		constructor() {
+			this.bot = bot;
 			this.connected = false;
 			bf.db.instances.push(this);
 			this.channelCompletion = new Map();
@@ -401,6 +402,19 @@ module.exports = function(passthrough) {
 			this.cacheMessage(message);
 			if (this.namesChannels.has(message.channel.id)) this.registerNames(message.channel);
 			return this.deserialiseMessage(message);
+		}
+
+		pretty(input, full) {
+			return this.query(input).then(rows => {
+				if (rows instanceof Array) {
+					if (rows[0] && rows[0].length) {
+						let rowCount = rows.length;
+						if (!full) rows = rows.slice(0, 20);
+						return cf.tableify(Array(rows[0].length).fill().map((_, i) => rows.map(r => r[i])))+"\n> Showing "+rows.length+" out of "+rowCount+" rows";
+					}
+				}
+				return rows;
+			});
 		}
 
 		/**
