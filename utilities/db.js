@@ -1,3 +1,16 @@
+/**
+ * @typedef {Object} IndexStore
+ * @property {Array} fields
+ * @property {Array[]} data
+ * @property {Object[]} queue A queue of changes waiting to be made to this index.
+ */
+
+/**
+ * @typedef {Object} NameStore
+ * @property {String} channelID
+ * @property {String[]} fields
+ */
+
 const Discord = require("eris");
 
 /**
@@ -23,10 +36,14 @@ module.exports = function(passthrough) {
 			this.channelRequests = new Map();
 			this.messageCache = new Discord.Collection(Discord.Message);
 			/**
-			 * @type {Map<String>} <channel ID the names apply to, \{channelID: where the names are stored, fields: \[the names\]\}>
+			 * @type {Map<String, NameStore>} <channel ID the names apply to, \{channelID: where the names are stored, fields: \[the names\]\}>
 			 */
 			this.names = new Map();
 			this.namesChannels = new Set();
+			/**
+			 * @type {Map<String, IndexStore>} <channel ID the indexes apply to, \{fields: \[\], data: \[...\[\]\]}>
+			 */
+			this.indexes = new Map();
 		}
 
 		connect(guild) {
@@ -361,6 +378,26 @@ module.exports = function(passthrough) {
 			this.namesChannels.add(channelObject.id);
 		}
 
+		/**
+		 * @param {} channel
+		 * @param {String[]} fields
+		 */
+		namesToIndexes(channel, fields) {
+			let channelObject = this.resolveChannel(channel);
+			let names = this.names.get(channelObject.id);
+			return fields.map(f => {
+				f = String(f);
+				if (entry[0].match(/^\d+$/)) return f;
+				else {
+					if (!names) throw new Error("Trying to resolve names, but names not available for channel "+channel);
+					let index = names.fields.indexOf(f);
+					if (index == -1) throw new Error("Name "+f+" not found for channel "+channel);
+					return index+1;
+				}
+			});
+		}
+
+
 		get(channel, options = {}) {
 			return this.filter(channel, options);
 		}
@@ -407,6 +444,7 @@ module.exports = function(passthrough) {
 			let string = this.serialiseData(data);
 			let message = await bf.sendMessage(channelObject, string);
 			this.cacheMessage(message);
+			this.modifyIndex(message);
 			if (this.namesChannels.has(message.channel.id)) this.registerNames(message.channel);
 			return this.deserialiseMessage(message);
 		}
@@ -490,8 +528,13 @@ module.exports = function(passthrough) {
 		 */
 		async createIndex(channel, fields) {
 			const maxLength = 2000 - "!!index\n".length;
-			
+
 			let channelObject = this.resolveChannel(channel);
+
+			// Normalise fields
+			fields = this.namesToIndexes(channelObject, fields);
+			if (!fields.includes("0")) fields.unshift("0");
+			// Get data to index
 			let items = await this.get(channelObject, {return: fields});
 			items = items.flat();
 			// Number of fields, ...fields, ......data. e.g. 2, name, price, Apple, 3.99, Banana, (etc)
@@ -517,6 +560,62 @@ module.exports = function(passthrough) {
 				previousPinPromise = newMessage.pin();
 			}
 			return fragments;
+		}
+
+		async loadIndex(channel) {
+			let channelObject = this.resolveChannel(channel);
+			// Return existing if possible
+			if (this.indexes.has(channelObject.id)) return this.indexes.get(channelObject.id);
+			// Fetch pin data
+			let pins = await channelObject.getPins(); // most recent is index 0
+			pins.reverse(); // operates in-place
+			// Combine pin data
+			let linear = [].concat(...pins.map(p => {
+				let content = p.content;
+				if (!content.startsWith("!!index\n")) {
+					throw new Error("Encountered non-index pinned message with ID "+p.id);
+				}
+				return this.deserialiseData(content.slice("!!index\n".length));
+			}));
+			// Extract fields
+			let numfields = Number(linear.shift());
+			let fields = linear.slice(0, numfields);
+			if (!fields.includes("0")) throw new Error("Index of channel "+channel+" does not contain messageIDs");
+			linear = linear.slice(numfields);
+			if (linear.length % numfields != 0) throw new Error("Bad linear length (length = "+linear.length+", fields = "+fields.length+")");
+			// Organise remaining data
+			let data = [];
+			for (let i = 0; i < linear.length; i += numfields) {
+				data.push(linear.slice(i, i+numfields));
+			}
+			// Return
+			let result = {fields, data, queue: []};
+			this.indexes.set(channelObject.id, result);
+			cf.log("Loaded index for channel "+channel, "info");
+			return result;
+		}
+
+		/**
+		 * @param {Discord.Message} message
+		 */
+		async modifyIndex(message) {
+			let index = this.indexes.get(message.channel.id);
+			if (!index) return;
+			index.queue.push(message);
+			if (index.process) return index.process;
+			else return index.process = applyIndexChanges(index);
+		}
+
+		/**
+		 * @param {IndexStore} index
+		 */
+		async applyIndexChanges(index) {
+			/*
+			do something with index.queue
+			construct a list of changes to be made
+			calculate what changes should be made to which messages
+			make the changes
+			*/
 		}
 	}
 
