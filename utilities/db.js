@@ -1,9 +1,4 @@
-/**
- * @typedef {Object} IndexStore
- * @property {Array} fields
- * @property {Array[]} data
- * @property {Object[]} queue A queue of changes waiting to be made to this index.
- */
+const Discord = require("eris");
 
 /**
  * @typedef {Object} NameStore
@@ -11,7 +6,20 @@
  * @property {String[]} fields
  */
 
-const Discord = require("eris");
+/**
+ * @typedef {Object} SerialComponents
+ * @property {String} prefix
+ * @property {String} separator
+ * @property {String[]} dataStrings
+ */
+
+/**
+ * @typedef {Object} IndexFragment
+ * @property {Discord.Message} message
+ * @property {String[]} contents
+ */
+
+void 0;
 
 /**
  * @param {Object} passthrough
@@ -27,7 +35,7 @@ module.exports = function(passthrough) {
 
 	if (!bf.db) bf.db = {};
 
-	bf.db.class = class DBcord {
+	class DBcord {
 		constructor() {
 			this.bot = bot;
 			this.connected = false;
@@ -58,9 +66,13 @@ module.exports = function(passthrough) {
 			 * @param {Discord.Message} message
 			 */
 			const messageAddCacheListener = message => {
-				if (message.guild.id == this.guild.id && message.type == 0 && message.content) {
-					console.log(`Caching ${message.id}: ${message.content}`);
-					this.cacheMessage(message);
+				if (message.guild.id == this.guild.id) {
+					if (message.type == 0 && message.content) {
+						console.log(`Caching ${message.id}: ${message.content}`);
+						this.cacheMessage(message);
+					} else if (message.type == 6) {
+						message.delete();
+					}
 				}
 			}
 			bot.on("messageCreate", messageAddCacheListener);
@@ -88,10 +100,16 @@ module.exports = function(passthrough) {
 		 * @param {Array} data
 		 * @returns {String}
 		 */
-		serialiseData(data, noFormat) {
-			/**
-			 * @type {String[]}
-			 */
+		serialiseData(data) {
+			let object = this.serialiseDataComponents(data);
+			return object.prefix+object.dataStrings.join(object.separator)
+		}
+
+		/**
+		 * @param {String[]} data
+		 * @returns {SerialComponents}
+		 */
+		serialiseDataComponents(data) {
 			let dataStrings = data.map(d => String(d));
 			let serial = dataStrings.join("");
 			let first = ";,|:.<>-_+=[]{}";
@@ -117,8 +135,7 @@ module.exports = function(passthrough) {
 				separator = Buffer.from(chars);
 			}
 			let prefix = "!"+separator+"!";
-			if (noFormat) return {prefix, separator, dataStrings};
-			else return prefix+dataStrings.join(separator);
+			return {prefix, separator, dataStrings};
 		}
 		
 		/**
@@ -181,7 +198,7 @@ module.exports = function(passthrough) {
 
 		/**
 		 * Get a bunch of messages matching input criteria. Searches the internal storage first, but requests more if needed.
-		 * @returns {Promise<Discord.Message[]>}
+		 * @returns {Promise<String[]>}
 		 */
 		async getMessages(channel, options = {}) {
 			if (options.single) options.limit = 1;
@@ -523,99 +540,124 @@ module.exports = function(passthrough) {
 			throw new Error("Schema does not already exist, and no value for into provided.");
 		}
 
-		/**
-		 * @param {} channel The channel to index
-		 */
-		async createIndex(channel, fields) {
-			const maxLength = 2000 - "!!index\n".length;
-
+		registerIndex(channel, fields) {
 			let channelObject = this.resolveChannel(channel);
+			// Already exists? Return it.
+			if (this.indexes.has(channelObject.id)) return this.indexes.get(channelObject.id);
+			// Doesn't exist? Make a new one.
+			let newIndex = new IndexStore(this, channelObject, fields);
+			this.indexes.set(channelObject.id, newIndex);
+			return newIndex;
+		}
+	}
+	bf.db.class = DBcord;
 
-			// Normalise fields
-			fields = this.namesToIndexes(channelObject, fields);
-			if (!fields.includes("0")) fields.unshift("0");
-			// Get data to index
-			let items = await this.get(channelObject, {return: fields});
-			items = items.flat();
-			// Number of fields, ...fields, ......data. e.g. 2, name, price, Apple, 3.99, Banana, (etc)
-			let indexData = [fields.length].concat(fields).concat(items);
-			let serial = this.serialiseData(indexData, true);
-			let fragments = [];
+	class IndexStore {
+		/**
+		 * @param {DBcord} db 
+		 * @param {Discord.TextChannel} channelObject
+		 * @param {String[]} fields
+		 */
+		constructor(db, channelObject, fields) {
+			this._indexPrefix = "!!index\n";
+
+			this.db = db;
+			this.channelObject = channelObject;
+			/** Indexes of fields that are indexed, e.g. ["0", "1"] for messageID and first field */
+			this.fields = fields;
+
+			/**
+			 * Single array of all index contents, for lookup purposes
+			 * @type {String[][]}
+			 */
+			this.contents = [];
+			
+			/**
+			 * Fragments of stored data.
+			 * @type {IndexFragment[]}
+			 */
+			this.fragments = [];
+			
+			/**
+			 * Changes to be made on next cycle
+			 * @type {Object[]}
+			 */
+			this.queue = [];
+
+			/** Whether changes are currently being stored */
+			this.applying = false;
+
+			/** Whether the queue will be altered next process tick */
+			this.willApply = false;
+		}
+
+		async setup() {
+			// Fetch pin data
+			let pins = await this.channelObject.getPins(); // most recent is index 0
+			pins.reverse(); // operates in-place
+			// Deserialise data
+			/** @type {IndexFragment[]} */
+			let data = pins.map(message => {
+				let content = message.content;
+				if (!content.startsWith(this._indexPrefix)) {
+					throw new Error("Encountered non-index pinned message with ID "+message.id);
+				}
+				let contents = this.db.deserialiseData(content.slice(this._indexPrefix.length));
+				return {message, contents};
+			});
+			// Load fields from first pin
+			this.fields = data.shift().contents;
+			if (!this.fields.includes("0")) throw new Error("Indexed fields of channel "+this.channelObject.name+" does not contain 0");
+			// Load fragments from remainaing pins
+			this.fragments = data;
+			// Organise data
+			let linear = [].concat(...this.fragments.map(f => f.contents));
+			if (linear.length % this.fields.length != 0) throw new Error("Bad linear length (length = "+linear.length+", fields = "+this.fields.length+")");
+			this.contents = [];
+			for (let i = 0; i < linear.length; i += this.fields.length) {
+				this.contents.push(linear.slice(i, i+this.fields.length));
+			}
+			// Done
+			cf.log("Loaded index for channel "+this.channelObject.name, "info");
+			return this;
+		}
+
+		async regenerate() {
+			/** Maximum length of data that can be put into a message */
+			const maxLength = 2000 - this._indexPrefix.length;
+			// Find out what separator to use
+			/** @type {String[][]} */
+			let messages = await this.db.get(this.channelObject, {return: this.fields});
+			let flat = [].concat(...messages);
+			let serial = this.db.serialiseDataComponents(flat);
+			// Join into fragments up to maxLength
+			let fieldsEntry = this.db.serialiseData(this.fields);
+			let fragments = [this._indexPrefix+fieldsEntry];
 			let current = "";
-			serial.dataStrings.forEach(s => {
-				if (current.length + s.length + serial.separator.length > maxLength) {
-					fragments.push(current);
+			messages.forEach(message => {
+				let nextMessage = message.join(serial.separator);
+				if (current.length + nextMessage.length + serial.separator.length > maxLength) {
+					fragments.push(this._indexPrefix + serial.prefix + current);
 					current = "";
 				}
-				if (current.length) s = serial.separator + s;
-				current += s;
+				if (current.length) nextMessage = serial.separator + nextMessage;
+				current += nextMessage;
 			});
-			fragments.push(current);
-			let prefix = "!!index\n!"+serial.separator+"!";
-			// Make sure the messages are sent in order, and make sure that the messages are pinned in order.
+			fragments.push(this._indexPrefix + serial.prefix + current);
+			// Send fragments
+			/** @type {Discord.Message[]} */
+			let sent = [];
 			let previousPinPromise;
 			while (fragments.length) {
-				let newContents = prefix+fragments.shift();
-				var newMessage = await Promise.all([bf.sendMessage(channelObject, newContents), previousPinPromise]).then(x => x[0]);
+				let newContents = fragments.shift();
+				let newMessage = await Promise.all([bf.sendMessage(this.channelObject, newContents), previousPinPromise]).then(x => x[0]);
+				sent.push(newMessage);
 				previousPinPromise = newMessage.pin();
 			}
-			return fragments;
+			return sent;
 		}
 
-		async loadIndex(channel) {
-			let channelObject = this.resolveChannel(channel);
-			// Return existing if possible
-			if (this.indexes.has(channelObject.id)) return this.indexes.get(channelObject.id);
-			// Fetch pin data
-			let pins = await channelObject.getPins(); // most recent is index 0
-			pins.reverse(); // operates in-place
-			// Combine pin data
-			let linear = [].concat(...pins.map(p => {
-				let content = p.content;
-				if (!content.startsWith("!!index\n")) {
-					throw new Error("Encountered non-index pinned message with ID "+p.id);
-				}
-				return this.deserialiseData(content.slice("!!index\n".length));
-			}));
-			// Extract fields
-			let numfields = Number(linear.shift());
-			let fields = linear.slice(0, numfields);
-			if (!fields.includes("0")) throw new Error("Index of channel "+channel+" does not contain messageIDs");
-			linear = linear.slice(numfields);
-			if (linear.length % numfields != 0) throw new Error("Bad linear length (length = "+linear.length+", fields = "+fields.length+")");
-			// Organise remaining data
-			let data = [];
-			for (let i = 0; i < linear.length; i += numfields) {
-				data.push(linear.slice(i, i+numfields));
-			}
-			// Return
-			let result = {fields, data, queue: []};
-			this.indexes.set(channelObject.id, result);
-			cf.log("Loaded index for channel "+channel, "info");
-			return result;
-		}
-
-		/**
-		 * @param {Discord.Message} message
-		 */
-		async modifyIndex(message) {
-			let index = this.indexes.get(message.channel.id);
-			if (!index) return;
-			index.queue.push(message);
-			if (index.process) return index.process;
-			else return index.process = applyIndexChanges(index);
-		}
-
-		/**
-		 * @param {IndexStore} index
-		 */
-		async applyIndexChanges(index) {
-			/*
-			do something with index.queue
-			construct a list of changes to be made
-			calculate what changes should be made to which messages
-			make the changes
-			*/
+		modify() {
 		}
 	}
 
