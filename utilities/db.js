@@ -67,9 +67,17 @@ module.exports = function(passthrough) {
 			 */
 			const messageAddCacheListener = message => {
 				if (message.guild.id == this.guild.id) {
-					if (message.type == 0 && message.content) {
-						console.log(`Caching ${message.id}: ${message.content}`);
-						this.cacheMessage(message);
+					if (message.type == 0 && message.content && !message.pinned) {
+						let row = this.deserialiseMessage(message);
+						if (row) {
+							console.log(`Caching ${message.id}: ${message.content}`);
+							if (this.indexes.has(message.channel.id)) {
+								let index = this.indexes.get(message.channel.id);
+								index.remove(row);
+								index.add(row);
+							}
+							this.cacheMessage(message);
+						}
 					} else if (message.type == 6) {
 						message.delete();
 					}
@@ -86,12 +94,17 @@ module.exports = function(passthrough) {
 					if (message.id && this.messageCache.has(message.id)) {
 						message = this.messageCache.get(message.id);
 						console.log(`Uncaching ${message.id}: ${message.content}`);
+						if (this.indexes.has(message.channel.id)) {
+							let index = this.indexes.get(message.channel.id);
+							let row = this.deserialiseMessage(message);
+							index.remove(row);
+						}
 						this.uncacheMessage(message);
 					}
 				});
 			}
 			bot.on("messageDelete", messageRemoveCacheListener);
-			bot.on("messageBulkDelete", messageRemoveCacheListener);
+			bot.on("messageDeleteBulk", messageRemoveCacheListener);
 
 			return this;
 		}
@@ -460,8 +473,6 @@ module.exports = function(passthrough) {
 			let channelObject = this.resolveChannel(channel);
 			let string = this.serialiseData(data);
 			let message = await bf.sendMessage(channelObject, string);
-			this.cacheMessage(message);
-			this.modifyIndex(message);
 			if (this.namesChannels.has(message.channel.id)) this.registerNames(message.channel);
 			return this.deserialiseMessage(message);
 		}
@@ -560,6 +571,8 @@ module.exports = function(passthrough) {
 		 */
 		constructor(db, channelObject, fields) {
 			this._indexPrefix = "!!index\n";
+			/** Maximum length of data that can be put into a message */
+			this.maxLength = 2000 - this._indexPrefix.length;
 
 			this.db = db;
 			this.channelObject = channelObject;
@@ -577,12 +590,6 @@ module.exports = function(passthrough) {
 			 * @type {IndexFragment[]}
 			 */
 			this.fragments = [];
-			
-			/**
-			 * Changes to be made on next cycle
-			 * @type {Object[]}
-			 */
-			this.queue = [];
 
 			/** Whether changes are currently being stored */
 			this.applying = false;
@@ -623,8 +630,6 @@ module.exports = function(passthrough) {
 		}
 
 		async regenerate() {
-			/** Maximum length of data that can be put into a message */
-			const maxLength = 2000 - this._indexPrefix.length;
 			// Find out what separator to use
 			/** @type {String[][]} */
 			let messages = await this.db.get(this.channelObject, {return: this.fields});
@@ -636,7 +641,7 @@ module.exports = function(passthrough) {
 			let current = "";
 			messages.forEach(message => {
 				let nextMessage = message.join(serial.separator);
-				if (current.length + nextMessage.length + serial.separator.length > maxLength) {
+				if (current.length + nextMessage.length + serial.separator.length > this.maxLength) {
 					fragments.push(this._indexPrefix + serial.prefix + current);
 					current = "";
 				}
@@ -657,7 +662,95 @@ module.exports = function(passthrough) {
 			return sent;
 		}
 
-		modify() {
+		/**
+		 * @param {String[]} row
+		 *		Data to be added to the index.
+		 *		Include all fields, because they will be filtered inside this function.
+		 */
+		add(row) {
+			let toAdd = this.fields.map(field => row[field]);
+			this.contents.push(toAdd);
+			let fragmentIndex = this.fragments.findIndex(fragment => 
+				(this._indexPrefix + this.db.serialiseData(fragment.contents.concat(toAdd))).length <= this.maxLength
+			);
+			cf.log("Applying index addition to fragment index "+fragmentIndex, "info");
+			let fragmentToUse = fragmentIndex != -1 ? this.fragments[fragmentIndex] : {contents: []};
+			fragmentToUse.contents = fragmentToUse.contents.concat(toAdd);
+			fragmentToUse.modified = true;
+			this.fragments[fragmentIndex] = fragmentToUse;
+			this.modifyNextTick();
+		}
+
+		/**
+		 * @param {String[]} row
+		 *		Data to be added to the index.
+		 *		Include all fields, because they will be filtered inside this function.
+		 */
+		remove(row) {
+			let id = row[0]; // assuming ID is 0 in row (should always be true?)
+			this.contents = this.contents.filter(entry => entry[0] != id); // assuming ID is 0 in index's row
+			this.fragments.forEach((fragment, fragmentIndex) => {
+				let index = 0;
+				while (index < fragment.contents.length) {
+					if (fragment.contents[index] == id) {
+						cf.log("Applying index removal to fragment index "+fragmentIndex+" position "+index, "info");
+						fragment.contents.splice(index, this.fields.length);
+						fragment.modified = true;
+					} else {
+						index += this.fields.length;
+					}
+				}
+			});
+			this.modifyNextTick();
+		}
+
+		modifyNextTick() {
+			if (this.willApply) return;
+			this.willApply = true;
+			if (!this.applying) setImmediate(() => this.apply());
+		}
+
+		async apply() {
+			this.willApply = false;
+			this.applying = true;
+			cf.log("Applying index changes...", "info");
+			
+			let promises = [];
+			this.fragments.forEach(fragment => {
+				if (fragment.modified) {
+					delete fragment.modified;
+					promises.push(new Promise(resolve => {
+						if (fragment.message) {
+							fragment.message.edit(this._indexPrefix+this.db.serialiseData(fragment.contents))
+							.then(() => {
+								cf.log("Successfully edited message", "info");
+								resolve();
+							})
+							.catch(err => {
+								console.error(err);
+								throw err;
+							});
+						} else {
+							bf.sendMessage(this.channelObject, this._indexPrefix+this.db.serialiseData(fragment.contents))
+							.then(message => {
+								cf.log("Successfully sent message", "info");
+								fragment.message = message;
+								message.pin();
+								resolve();
+							})
+							.catch(err => {
+								console.error(err);
+								throw err;
+							});
+						}
+					}));
+				}
+			});
+			await Promise.all(promises);
+
+			cf.log("Applied "+promises.length+" changes", "info");
+			this.applying = false;
+			if (this.willApply) this.apply();
 		}
 	}
 

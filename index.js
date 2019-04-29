@@ -121,8 +121,9 @@ bot.connect();
 
 let db = new bf.db.class();
 global.db = db;
-bot.once("ready", () => {
+bot.once("ready", async () => {
 	db.connect("565467535881797647");
 	db.registerNames("names");
+	await db.registerIndex("edibles").setup();
 	log("Connected to DBcord", "info");
 });
