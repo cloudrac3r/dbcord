@@ -499,11 +499,12 @@ module.exports = function(passthrough) {
 			})).then(messages => {
 				return messages.map(m => {
 					let row = this.deserialiseMessage(m);
-					if (this.indexes.has(message.channel.id)) {
-						let index = this.indexes.get(message.channel.id);
+					if (this.indexes.has(m.channel.id)) {
+						let index = this.indexes.get(m.channel.id);
 						index.remove(row);
 						index.add(row);
 					}
+					return row;
 				});
 			});
 		}
