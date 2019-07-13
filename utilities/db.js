@@ -71,11 +71,6 @@ module.exports = function(passthrough) {
 						let row = this.deserialiseMessage(message);
 						if (row) {
 							console.log(`Caching ${message.id}: ${message.content}`);
-							if (this.indexes.has(message.channel.id)) {
-								let index = this.indexes.get(message.channel.id);
-								index.remove(row);
-								index.add(row);
-							}
 							this.cacheMessage(message);
 						}
 					} else if (message.type == 6) {
@@ -452,17 +447,26 @@ module.exports = function(passthrough) {
 				return bot.editMessage(channelObject.id, item[0], this.serialiseData(item.slice(1)))
 			})).then(messages => {
 				return messages.map(m => {
-					return this.deserialiseMessage(m);
+					let row = this.deserialiseMessage(m);
+					if (this.indexes.has(message.channel.id)) {
+						let index = this.indexes.get(message.channel.id);
+						index.remove(row);
+						index.add(row);
+					}
 				});
 			});
 		}
 
 		delete(channel, options = {}) {
 			let channelObject = this.resolveChannel(channel);
-			return this.filter(channel, options).then(messages => {
-				return bot.deleteMessages(channelObject.id, messages.map(m => {
-					return m.messageID;
-				}));
+			return this.filter(channelObject, options).then(messages => {
+				if (this.indexes.has(channelObject.id)) {
+					let index = this.indexes.get(channelObject.id);
+					messages.forEach(row => {
+						index.remove(row);
+					});
+				}
+				return bot.deleteMessages(channelObject.id, messages.map(m => m.messageID));
 			});
 		}
 
@@ -474,7 +478,12 @@ module.exports = function(passthrough) {
 			let string = this.serialiseData(data);
 			let message = await bf.sendMessage(channelObject, string);
 			if (this.namesChannels.has(message.channel.id)) this.registerNames(message.channel);
-			return this.deserialiseMessage(message);
+			let row = this.deserialiseMessage(message);
+			if (this.indexes.has(message.channel.id)) {
+				let index = this.indexes.get(message.channel.id);
+				index.add(row);
+			}
+			return row;
 		}
 
 		pretty(input, full) {
@@ -649,6 +658,11 @@ module.exports = function(passthrough) {
 				current += nextMessage;
 			});
 			fragments.push(this._indexPrefix + serial.prefix + current);
+			// Delete previous messages
+			let pins = await this.channelObject.getPins();
+			pins.forEach(pin => {
+				pin.delete();
+			})
 			// Send fragments
 			/** @type {Discord.Message[]} */
 			let sent = [];
@@ -683,7 +697,7 @@ module.exports = function(passthrough) {
 
 		/**
 		 * @param {String[]} row
-		 *		Data to be added to the index.
+		 *		Data to be removed from the index.
 		 *		Include all fields, because they will be filtered inside this function.
 		 */
 		remove(row) {
