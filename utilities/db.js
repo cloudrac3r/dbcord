@@ -66,7 +66,7 @@ module.exports = function(passthrough) {
 			 * @param {Discord.Message} message
 			 */
 			const messageAddCacheListener = message => {
-				if (message.guild.id == this.guild.id) {
+				if (message.guild && message.guild.id == this.guild.id) {
 					if (message.type == 0 && message.content && !message.pinned) {
 						let row = this.deserialiseMessage(message);
 						if (row) {
@@ -218,7 +218,68 @@ module.exports = function(passthrough) {
 				let de = this.deserialiseMessage(m);
 				if (de !== null) dsm.push(de);
 			});
+			// Resolve filters (this is more janky than the rest)
 			if (options.filter) options.filters = [options.filter];
+			if (options.filters) {
+				for (let i = 0; i < options.filters.length; i++) {
+					let filter = options.filters[i];
+					if (filter.raw) filter = filter.raw;
+					if (typeof(filter) == "string") { // e.g. `name == Cadence`
+						let split = filter.split(" ");
+						let nameFragments = split[0].split(".");
+						/*
+							index: index of data to compare, 0 is message ID, 1- is rows, or string for named index
+							value: value to compare against
+							comparison: comparison operator
+							?transform: operation to perform on row before comparing
+						*/
+						filter = {
+							index: nameFragments.slice(-1)[0],
+							table: nameFragments.length > 1 ? nameFragments[0] : undefined,
+							value: split[2],
+							comparison: split[1]
+						}
+					}
+					if (isNaN(+filter.index)) filter.index = this.names.get(channelObject.id).fields.indexOf(filter.index)+1;
+					else filter.index = +filter.index;
+					options.filters[i] = filter;
+				}
+			}
+			// Try to use the index
+			let indexIsSufficient = false;
+			if (this.indexes.has(channelObject.id) && this.names.has(channelObject.id)) {
+				let index = this.indexes.get(channelObject.id);
+				let names = this.names.get(channelObject.id);
+				// Which names do we want to return?
+				if (options.return === undefined) { // return all fields
+					var returnNames = names.fields;
+				} else if (typeof(options.return) == "string") { // single field
+					returnNames = [options.return];
+				} else { // array of fields
+					returnNames = options.return;
+				}
+				// Convert to numbers
+				returnNames = returnNames.map(name => {
+					if (isNaN(+name)) return names.fields.indexOf(name)+1;
+					else return +name;
+				})
+				// Which names do we want to filter? (These are already numbers.)
+				let filterNames = [];
+				if (options.filters) filterNames = options.filters.map(filter => filter.index);
+				// Are these names actually in the index?
+				if (returnNames.every(rname => index.fields.includes(rname.toString())) && filterNames.every(fname => index.fields.includes(fname.toString()))) {
+					indexIsSufficient = true;
+					let contents = index.contents.map(row => {
+						let newrow = row.slice();
+						newrow.messageID = newrow[0];
+						for (let i = 1; i < newrow.length; i++) {
+							newrow[names.fields[i-1]] = newrow[i];
+						}
+						return newrow;
+					});
+					dsm = dsm.concat(contents);
+				}
+			}
 			if (options.filters) {
 				dsm = dsm.filter(item => {
 					return options.filters.every(filter => {
@@ -228,17 +289,6 @@ module.exports = function(passthrough) {
 							comparison: comparison operator
 							?transform: operation to perform on row before comparing
 						*/
-						if (filter.raw) filter = filter.raw;
-						if (typeof(filter) == "string") { // e.g. `name == Cadence`
-							let split = filter.split(" ");
-							let nameFragments = split[0].split(".");
-							filter = {
-								index: nameFragments.slice(-1)[0],
-								table: nameFragments.length > 1 ? nameFragments[0] : undefined,
-								value: split[2],
-								comparison: split[1]
-							}
-						}
 						// Quit if table doesn't match
 						if (filter.table !== undefined && filter.table != channelObject.name) return true;
 						// Quit if index doesn't exist
@@ -246,24 +296,25 @@ module.exports = function(passthrough) {
 						if (rowValue === undefined) return options.ignoreBadFiterIndexes;
 						let filterValue = filter.value;
 						if (filter.transform) rowValue = filter.transform(rowValue);
+						let comparison = filter.comparison;
 						// Check for number comparison
-						if (filter.comparison.startsWith("#")) {
-							filter.comparison = filter.comparison.slice(1);
+						if (comparison.startsWith("#")) {
+							comparison = comparison.slice(1);
 							rowValue = +rowValue;
 							filterValue = +filterValue;
 						}
 						// Do comparison
-						if (filter.comparison == "=" || filter.comparison == "==") return rowValue == filterValue;
-						else if (filter.comparison == "<") return rowValue < filterValue;
-						else if (filter.comparison == ">") return rowValue > filterValue;
-						else if (filter.comparison == "<=") return rowValue <= filterValue;
-						else if (filter.comparison == ">=") return rowValue >= filterValue;
-						else if (filter.comparison == "!=") return rowValue != filterValue;
+						if (comparison == "=" || comparison == "==") return rowValue == filterValue;
+						else if (comparison == "<") return rowValue < filterValue;
+						else if (comparison == ">") return rowValue > filterValue;
+						else if (comparison == "<=") return rowValue <= filterValue;
+						else if (comparison == ">=") return rowValue >= filterValue;
+						else if (comparison == "!=") return rowValue != filterValue;
 						else return false;
 					});
 				});
 			}
-			if (messages.length >= options.limit || this.channelCompletion.get(channelObject.id) == 0) {
+			if (messages.length >= options.limit || this.channelCompletion.get(channelObject.id) == 0 || indexIsSufficient) {
 				dsm = this.filterReturn(dsm, options);
 				if (options.single) return dsm[0];
 				else return dsm.slice(0, options.limit);
@@ -624,7 +675,7 @@ module.exports = function(passthrough) {
 			// Load fields from first pin
 			this.fields = data.shift().contents;
 			if (!this.fields.includes("0")) throw new Error("Indexed fields of channel "+this.channelObject.name+" does not contain 0");
-			// Load fragments from remainaing pins
+			// Load fragments from remaining pins
 			this.fragments = data;
 			// Organise data
 			let linear = [].concat(...this.fragments.map(f => f.contents));
@@ -673,6 +724,8 @@ module.exports = function(passthrough) {
 				sent.push(newMessage);
 				previousPinPromise = newMessage.pin();
 			}
+			// Reload data
+			await this.setup();
 			return sent;
 		}
 
